@@ -56,6 +56,7 @@ mod modules;
 mod popup;
 mod script;
 mod style;
+mod module_container;
 
 pub const APP_ID: &str = "dev.jstanger.ironbar";
 const VERSION: &str = env!("CARGO_PKG_VERSION");

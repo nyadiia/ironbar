@@ -54,6 +54,8 @@ pub enum ModuleLocation {
     Center,
     Right,
 }
+
+#[derive(Clone)]
 pub struct ModuleInfo<'a> {
     pub app: &'a Application,
     pub location: ModuleLocation,
@@ -85,6 +87,7 @@ where
 {
     pub id: usize,
     pub ironbar: Rc<Ironbar>,
+    pub popup: Rc<Popup>,
     pub tx: mpsc::Sender<ModuleUpdateEvent<TSend>>,
     pub update_tx: broadcast::Sender<TSend>,
     pub controller_tx: mpsc::Sender<TReceive>,
@@ -121,6 +124,32 @@ pub struct ModuleParts<W: IsA<Widget>> {
 impl<W: IsA<Widget>> ModuleParts<W> {
     fn new(widget: W, popup: Option<ModulePopupParts>) -> Self {
         Self { widget, popup }
+    }
+
+    pub fn setup_identifiers(&self, common: &CommonConfig) {
+        if let Some(ref name) = common.name {
+            self.widget.set_widget_name(name);
+
+            if let Some(ref popup) = self.popup {
+                popup.container.set_widget_name(&format!("popup-{name}"));
+            }
+        }
+
+        if let Some(ref class) = common.class {
+            // gtk counts classes with spaces as the same class
+            for part in class.split(' ') {
+                self.widget.style_context().add_class(part);
+            }
+
+            if let Some(ref popup) = self.popup {
+                for part in class.split(' ') {
+                    popup
+                        .container
+                        .style_context()
+                        .add_class(&format!("popup-{part}"));
+                }
+            }
+        }
     }
 }
 
@@ -201,10 +230,12 @@ where
         self,
         _tx: mpsc::Sender<Self::ReceiveMessage>,
         _rx: broadcast::Receiver<Self::SendMessage>,
+        _context: WidgetContext<Self::SendMessage, Self::ReceiveMessage>,
         _info: &ModuleInfo,
     ) -> Option<gtk::Box>
     where
         Self: Sized,
+        <Self as Module<W>>::SendMessage: Clone,
     {
         None
     }
@@ -214,7 +245,6 @@ where
 /// This setup includes widget/popup content and event channels.
 pub fn create_module<TModule, TWidget, TSend, TRec>(
     module: TModule,
-    id: usize,
     ironbar: Rc<Ironbar>,
     name: Option<String>,
     info: &ModuleInfo,
@@ -225,6 +255,8 @@ where
     TWidget: IsA<Widget>,
     TSend: Debug + Clone + Send + 'static,
 {
+    let id = Ironbar::unique_id();
+
     let (ui_tx, ui_rx) = mpsc::channel::<ModuleUpdateEvent<TSend>>(64);
     let (controller_tx, controller_rx) = mpsc::channel::<TRec>(64);
 
@@ -233,6 +265,7 @@ where
     let context = WidgetContext {
         id,
         ironbar,
+        popup: popup.clone(),
         tx: ui_tx,
         update_tx: tx.clone(),
         controller_tx,
@@ -276,10 +309,6 @@ fn setup_receiver<TSend>(
 ) where
     TSend: Debug + Clone + Send + 'static,
 {
-    // some rare cases can cause the popup to incorrectly calculate its size on first open.
-    // we can fix that by just force re-rendering it on its first open.
-    let mut has_popup_opened = false;
-
     glib_recv_mpsc!(rx, ev => {
         match ev {
             ModuleUpdateEvent::Update(update) => {
@@ -287,28 +316,16 @@ fn setup_receiver<TSend>(
             }
             ModuleUpdateEvent::TogglePopup(button_id) => {
                 debug!("Toggling popup for {} [#{}]", name, id);
-                if popup.is_visible() {
+                if popup.is_visible() && popup.current_widget().unwrap_or_default() == id {
                     popup.hide();
                 } else {
                     popup.show(id, button_id);
-
-                    // force re-render on initial open to try and fix size issue
-                    if !has_popup_opened {
-                        popup.show(id, button_id);
-                        has_popup_opened = true;
-                    }
                 }
             }
             ModuleUpdateEvent::OpenPopup(button_id) => {
                 debug!("Opening popup for {} [#{}]", name, id);
                 popup.hide();
                 popup.show(id, button_id);
-
-                // force re-render on initial open to try and fix size issue
-                if !has_popup_opened {
-                    popup.show(id, button_id);
-                    has_popup_opened = true;
-                }
             }
             #[cfg(feature = "launcher")]
             ModuleUpdateEvent::OpenPopupAt(geometry) => {
@@ -316,12 +333,6 @@ fn setup_receiver<TSend>(
 
                 popup.hide();
                 popup.show_at(id, geometry);
-
-                // force re-render on initial open to try and fix size issue
-                if !has_popup_opened {
-                    popup.show_at(id, geometry);
-                    has_popup_opened = true;
-                }
             }
             ModuleUpdateEvent::ClosePopup => {
                 debug!("Closing popup for {} [#{}]", name, id);
@@ -329,35 +340,6 @@ fn setup_receiver<TSend>(
             }
         }
     });
-}
-
-pub fn set_widget_identifiers<TWidget: IsA<Widget>>(
-    widget_parts: &ModuleParts<TWidget>,
-    common: &CommonConfig,
-) {
-    if let Some(ref name) = common.name {
-        widget_parts.widget.set_widget_name(name);
-
-        if let Some(ref popup) = widget_parts.popup {
-            popup.container.set_widget_name(&format!("popup-{name}"));
-        }
-    }
-
-    if let Some(ref class) = common.class {
-        // gtk counts classes with spaces as the same class
-        for part in class.split(' ') {
-            widget_parts.widget.style_context().add_class(part);
-        }
-
-        if let Some(ref popup) = widget_parts.popup {
-            for part in class.split(' ') {
-                popup
-                    .container
-                    .style_context()
-                    .add_class(&format!("popup-{part}"));
-            }
-        }
-    }
 }
 
 /// Takes a widget and adds it into a new `gtk::EventBox`.
