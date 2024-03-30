@@ -128,6 +128,7 @@
           gsettings-desktop-schemas
           libxkbcommon
           libpulseaudio
+          luajit
         ];
 
         RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
